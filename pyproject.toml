@@ -1,0 +1,20 @@
+[project]
+name = "open-sima2"
+version = "0.1.0"
+description = "Open implementation of SIMA 2: An Agent that Plays, Reasons, and Learns With You in Virtual 3D Worlds"
+requires-python = ">=3.9,<3.14"
+dependencies = [
+    "torch",
+    "torchvision",
+    "numpy",
+    "opencv-python",
+    "mss",
+    "pynput",
+    "Pillow",
+    "transformers",
+    "accelerate",
+    "bitsandbytes",
+    "jupyter>=1.1.1",
+    "peft",
+    "trl<0.9.0",
+]

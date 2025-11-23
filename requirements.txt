@@ -1,0 +1,10 @@
+unsloth
+torch
+numpy
+opencv-python
+mss
+pynput
+Pillow
+transformers
+accelerate
+bitsandbytes
