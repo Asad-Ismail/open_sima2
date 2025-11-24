@@ -4,23 +4,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# Virtual Environment
+# Virtual environments
 .venv/
 venv/
 ENV/
@@ -30,12 +15,9 @@ env/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# Training data
-training_data/
-screenshots/
-*.png
-*.jpg
-*.jpeg
+# Unsloth compiled cache
+unsloth_compiled_cache/
+notebooks/unsloth_compiled_cache/
 
 # IDE
 .vscode/
@@ -48,13 +30,14 @@ screenshots/
 .DS_Store
 Thumbs.db
 
-# Model checkpoints
-checkpoints/
-models/
-*.pth
-*.bin
-*.safetensors
-
-# Logs
+# Project specific
+imgs/
 *.log
-logs/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# UV lock file (optional - uncomment if you don't want to track it)
+# uv.lock

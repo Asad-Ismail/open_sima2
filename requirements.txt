@@ -8,3 +8,6 @@ Pillow
 transformers
 accelerate
 bitsandbytes
+instructor
+pydantic
+datasets==4.3.0

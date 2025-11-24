@@ -17,4 +17,7 @@ dependencies = [
     "jupyter>=1.1.1",
     "peft",
     "trl<0.9.0",
+    "pydantic>=2.12.4",
+    "instructor>=1.13.0",
+    "datasets==4.4.1",
 ]

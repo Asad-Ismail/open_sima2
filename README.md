@@ -37,14 +37,17 @@ pip install uv
 ### 3. Install Python Dependencies
 
 ```bash
-# Sync all dependencies from lock file (recommended - ensures exact versions)
+# Create a virtual environment
+uv venv
+source .venv/bin/activate  # On Linux/macOS
+# .venv\Scripts\activate  # On Windows
+
+# Install dependencies from pyproject.toml
 uv sync
 
 # Install unsloth (includes compatible xformers automatically)
 uv pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 ```
-
-**Note:** The `uv.lock` file ensures reproducible installations. All dependencies are pinned to tested versions.
 
 ## Usage
 
