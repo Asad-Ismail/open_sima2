@@ -19,10 +19,18 @@ class GameAction(BaseModel):
         description="Current visibility status based on the Light Gem"
     )
     detected_threats: str = Field(description="Any guards or threats detected in the scene")
-    recommended_action: Literal["w", "s", "a", "d", "c", "space", "enter", "none"] = Field(
-        description="The recommended control action to take"
+    facing_target: bool = Field(description="True if character is facing the goal object, False if need to look around")
+    mouse_look: dict = Field(
+        description="Mouse movement for camera control. Format: {'x': -100 to 100, 'y': -50 to 50}. Use to look around and face goal object. x=left/right, y=up/down. Set to {'x': 0, 'y': 0} if no look needed."
     )
-    action_explanation: str = Field(description="Brief explanation of why this action is recommended")
+    action_sequence: list[Literal["w", "s", "a", "d", "c", "space", "enter", "none"]] = Field(
+        description="List of 0-5 actions to execute in sequence. Empty list if goal is reached.",
+        min_length=0,
+        max_length=5
+    )
+    action_explanation: str = Field(description="Brief explanation of why these actions are recommended")
+    goal_reached: bool = Field(description="True if the current goal has been reached, False otherwise")
+    goal_status: str = Field(description="Description of progress towards goal or confirmation of completion")
 
 
 class QwenVisionAgent:
@@ -45,36 +53,60 @@ class QwenVisionAgent:
         
         # Enable inference mode
         FastVisionModel.for_inference(self.model)
+
+
+        goal="Navigate to lantern."
         
-        self.system_prompt = """You are an elite stealth agent playing 'The Dark Mod'.
-Your goal is to navigate the level, steal loot, and avoid detection.
+        self.system_prompt = f"""You are an elite stealth agent playing 'The Dark Mod'.
+        Your goal is to {goal}. Remember you are in 3D environment
+        and must use the provided controls to move around.
 
-CONTROLS YOU CAN USE:
-- 'w': Move Forward
-- 's': Move Backward
-- 'a': Strafe Left
-- 'd': Strafe Right
-- 'c': Toggle Crouch (Use this when the Light Gem is bright/white)
-- 'space': Jump / Mantle
-- 'enter': Interact / Open Door / Pick up Loot
+        IMPORTANT: You MUST be facing the goal object to navigate towards it.
+        
+        CRITICAL SEARCH RULES - You must COMBINE vertical adjustment WITH horizontal rotation:
+        1. If you see CEILING/BEAMS → Look down AND rotate: {{"x": 100, "y": 40}}
+        2. If you see only FLOOR → Look up AND rotate: {{"x": 100, "y": -30}}
+        3. If at good height (horizon visible) → Just rotate: {{"x": 100, "y": 0}}
+        
+        NEVER use x=0 when searching! You must ALWAYS rotate to scan 360°:
+        - Good: {{"x": 100, "y": 40}} = look down while rotating right
+        - Good: {{"x": 100, "y": 0}} = scan at horizon
+        - Good: {{"x": 100, "y": -30}} = look up slightly while rotating
+        - BAD: {{"x": 0, "y": 40}} = only vertical, NO horizontal scan!
+        
+        The lantern could be ANYWHERE in 360° around you. You MUST rotate continuously while adjusting height.
 
-HUD GUIDE:
-- Bottom Center Icon: Light Gem.
-  * Dark/Black = You are hidden (Safe).
-  * Bright/White = You are visible (Danger).
-- Red Bar: Health.
-- Compass: Direction.
+        CONTROLS YOU CAN USE:
+        - MOUSE: Look around (x: -100 to 100 for left/right, y: -50 to 50 for up/down)
+        - 'w': Move Forward
+        - 's': Move Backward
+        - 'a': Strafe Left
+        - 'd': Strafe Right
+        - 'c': Toggle Crouch (Use this when the Light Gem is bright/white)
+        - 'space': Jump / Mantle
+        - 'enter': Interact / Open Door / Pick up Loot
 
-CRITICAL: You MUST respond with ONLY a valid JSON object in this exact format:
-{
-  "reasoning": "your detailed analysis of the current game state",
-  "visibility_status": "hidden" or "visible" or "partially_visible",
-  "detected_threats": "description of any guards or threats",
-  "recommended_action": "w" or "s" or "a" or "d" or "c" or "space" or "enter" or "none",
-  "action_explanation": "brief explanation of why this action is recommended"
-}
+        HUD GUIDE:
+        - Bottom Center Icon: Light Gem.
+        * Dark/Black = You are hidden (Safe).
+        * Bright/White = You are visible (Danger).
+        - Red Bar: Health.
+        - Compass: Direction.
 
-Do NOT include any text before or after the JSON object. Output ONLY valid JSON."""
+        CRITICAL: You MUST respond with ONLY a valid JSON object in this exact format:
+        {{
+        "reasoning": "your detailed analysis - what you see (ceiling/floor/horizon) and what you'll do",
+        "visibility_status": "hidden" or "visible" or "partially_visible",
+        "detected_threats": "description of any guards or threats",
+        "facing_target": true or false (Can you SEE the lantern right now?),
+        "mouse_look": {{"x": 100, "y": 40}} (ALWAYS include x=100 to rotate! Combine with y: ceiling=y:40, floor=y:-30, horizon=y:0. NEVER x:0 when searching!),
+        "action_sequence": ["w", "w", "w"] (list of 0-5 actions, e.g., 3 forward moves to reach lantern. Empty [] if goal reached),
+        "action_explanation": "brief explanation of why these actions are recommended",
+        "goal_reached": true or false,
+        "goal_status": "description of goal progress or completion confirmation"
+        }}
+
+        Do NOT include any text before or after the JSON object. Output ONLY valid JSON."""
     
     def analyze_frame(
         self,
@@ -236,15 +268,19 @@ Do NOT include any text before or after the JSON object. Output ONLY valid JSON.
         reasoning = response
         visibility_status = "hidden"
         detected_threats = "None detected"
-        recommended_action = "none"
+        facing_target = False
+        mouse_look = {"x": 0, "y": 0}
+        action_sequence = ["none"]
         action_explanation = "Based on analysis"
+        goal_reached = False
+        goal_status = "In progress"
         
         # Try to extract action from common patterns
         action_match = re.search(r'[Aa]ction[:\s]+(\w)', response)
         if action_match:
             action = action_match.group(1).lower()
-            if action in ['w', 's', 'a', 'd', 'c']:
-                recommended_action = action
+            if action in ['w', 's', 'a', 'd', 'c', 'space', 'enter']:
+                action_sequence = [action]
         
         # Check for visibility keywords
         if any(word in response.lower() for word in ['bright', 'visible', 'light', 'white']):
@@ -256,12 +292,26 @@ Do NOT include any text before or after the JSON object. Output ONLY valid JSON.
         if any(word in response.lower() for word in ['guard', 'enemy', 'patrol', 'threat']):
             detected_threats = "Guard or threat detected"
         
+        # Check for facing keywords
+        if any(word in response.lower() for word in ['facing', 'looking at', 'see the', 'visible']):
+            facing_target = True
+        
+        # Check for goal completion
+        if any(word in response.lower() for word in ['goal reached', 'objective complete', 'reached lantern', 'arrived']):
+            goal_reached = True
+            goal_status = "Goal reached"
+            action_sequence = []
+        
         return GameAction(
             reasoning=reasoning,
             visibility_status=visibility_status,
             detected_threats=detected_threats,
-            recommended_action=recommended_action,
-            action_explanation=action_explanation
+            facing_target=facing_target,
+            mouse_look=mouse_look,
+            action_sequence=action_sequence,
+            action_explanation=action_explanation,
+            goal_reached=goal_reached,
+            goal_status=goal_status
         )
 
 
