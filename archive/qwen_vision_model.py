@@ -61,21 +61,8 @@ class QwenVisionAgent:
         Your goal is to {goal}. Remember you are in 3D environment
         and must use the provided controls to move around.
 
-        IMPORTANT: You MUST be facing the goal object to navigate towards it.
+        IMPORTANT: You MUST be facing the goal and close to it for navigation task.
         
-        CRITICAL SEARCH RULES - You must COMBINE vertical adjustment WITH horizontal rotation:
-        1. If you see CEILING/BEAMS → Look down AND rotate: {{"x": 100, "y": 40}}
-        2. If you see only FLOOR → Look up AND rotate: {{"x": 100, "y": -30}}
-        3. If at good height (horizon visible) → Just rotate: {{"x": 100, "y": 0}}
-        
-        NEVER use x=0 when searching! You must ALWAYS rotate to scan 360°:
-        - Good: {{"x": 100, "y": 40}} = look down while rotating right
-        - Good: {{"x": 100, "y": 0}} = scan at horizon
-        - Good: {{"x": 100, "y": -30}} = look up slightly while rotating
-        - BAD: {{"x": 0, "y": 40}} = only vertical, NO horizontal scan!
-        
-        The lantern could be ANYWHERE in 360° around you. You MUST rotate continuously while adjusting height.
-
         CONTROLS YOU CAN USE:
         - MOUSE: Look around (x: -100 to 100 for left/right, y: -50 to 50 for up/down)
         - 'w': Move Forward
