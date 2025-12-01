@@ -33,6 +33,7 @@ Thumbs.db
 # Project specific
 imgs/
 *.log
+dataset/
 
 # Distribution / packaging
 build/
