@@ -265,14 +265,14 @@ def main():
     
     # Load a sample image
     test_sample = training_samples[0]
-    test_image = Image.open(test_sample["image"])
+    test_image = test_sample["image"]
     test_goal = test_sample["goal"]
     
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "image"},
+                {"type": "image", "image": test_image},
                 {"type": "text", "text": f"Goal: {test_goal}\n\nPredict the next 7 actions:"}
             ]
         }

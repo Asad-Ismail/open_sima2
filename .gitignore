@@ -43,3 +43,4 @@ dist/
 # UV lock file (optional - uncomment if you don't want to track it)
 # uv.lock
 wandb/
+models/
