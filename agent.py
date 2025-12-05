@@ -12,7 +12,7 @@ import sys
 
 from src.vision_agent import VisionAgent
 from src.screen_capture import get_window_id, get_window_geometry, validate_region
-from src.game_controls import execute_mouse_look, execute_action_sequence, focus_window
+from src.game_controls import execute_action_sequence, focus_window
 
 
 def get_user_goal() -> str:
@@ -25,12 +25,24 @@ def get_user_goal() -> str:
 
 
 def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Autonomous game agent")
+    parser.add_argument("--model", type=str, 
+                       default="unsloth/Qwen3-VL-8B-Instruct-unsloth-bnb-4bit",
+                       help="Model path (use 'models/gameplay_agent_lora' for fine-tuned)")
+    parser.add_argument("--goal", type=str, default="Navigate to lantern",
+                       help="Initial goal instruction")
+    args = parser.parse_args()
+    
     print("=" * 80)
     print("🎮 AUTONOMOUS GAME AGENT")
     print("=" * 80)
-    print("\n🧠 Loading Vision Model...")
+    print(f"\n🧠 Loading Vision Model: {args.model}")
+    print(f"🎯 Initial Goal: {args.goal}")
     
-    agent = VisionAgent()
+    agent = VisionAgent(model_path=args.model)
+    agent.update_goal(args.goal)
     
     game_name = "The Dark Mod"
     
@@ -50,9 +62,10 @@ def main():
     time.sleep(2)
     
     frame_count = 0
-    decision_interval = 3
     goal_reached = False
-    frames_not_facing = 0
+    decision_interval = 3  # Make decision every 3 frames (0.3s)
+    
+    print("🎯 Using first action from each prediction (visually-grounded control)")
     
     with mss.mss() as sct:
         try:
@@ -71,7 +84,6 @@ def main():
                     agent.update_goal(new_goal)
                     goal_reached = False
                     frame_count = 0
-                    frames_not_facing = 0
                     print("⏳ Resuming in 2 seconds...")
                     time.sleep(2)
                     continue
@@ -92,51 +104,34 @@ def main():
                     
                     img_pil = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
                     
+                    # Make decision every decision_interval frames
                     if frame_count % decision_interval == 0:
                         print(f"\n{'='*60}")
                         print(f"Frame: {frame_count}")
                         print("🤔 Analyzing scene...")
                         
-                        action = agent.analyze_frame(
-                            img_pil,
-                            instruction="Analyze the current game state and decide the next actions.",
-                            max_new_tokens=300,
-                            temperature=0.7
-                        )
+                        # Model predicts next 7 actions (for training temporal coherence)
+                        predicted_actions = agent.predict_actions(img_pil)
                         
-                        print(f"\n💭 Reasoning: {action.reasoning[:150]}...")
-                        print(f"👁 Visibility: {action.visibility_status}")
-                        print(f"⚠ Threats: {action.detected_threats}")
-                        print(f"🎯 Facing Target: {action.facing_target}")
-                        print(f"🖱️  Mouse Look: {action.mouse_look}")
-                        print(f"🎮 Actions: {action.action_sequence}")
-                        print(f"📝 Explanation: {action.action_explanation}")
-                        print(f"🏁 Goal Status: {action.goal_status}")
+                        print(f"🎮 Predicted sequence: {predicted_actions}")
                         
-                        if action.goal_reached:
+                        # Check if goal reached (all actions are 'none')
+                        if all(a == 'none' for a in predicted_actions):
                             goal_reached = True
                             print("\n✨ ✅ GOAL REACHED! ✅ ✨")
                             continue
                         
-                        if not action.facing_target:
-                            frames_not_facing += 1
-                            print(f"\n🔍 Target not visible (frame {frames_not_facing}) - AI searching...")
-                            
-                            # If AI didn't provide mouse movement, add smooth automatic search
-                            if action.mouse_look.get('x', 0) == 0 and action.mouse_look.get('y', 0) == 0:
-                                print(f"   🔄 Auto-search: rotating camera to find target")
-                                action.mouse_look = {"x": 50, "y": 0}
-                            
-                            if action.mouse_look:
-                                execute_mouse_look(action.mouse_look)
-                        else:
-                            frames_not_facing = 0
-                            
-                            if action.mouse_look:
-                                execute_mouse_look(action.mouse_look)
+                        # Execute ONLY first action (based on current visual observation)
+                        # The other 6 predictions are for training purposes only
+                        # By next decision, we'll have new visual info and re-predict
+                        current_action = predicted_actions[0]
                         
-                        if action.action_sequence:
-                            execute_action_sequence(action.action_sequence)
+                        if current_action.lower() != 'none':
+                            print(f"  ▶ Executing: {current_action}")
+                            execute_action_sequence([current_action], hold_duration=0.3)
+                        else:
+                            # Wait this decision interval
+                            time.sleep(0.3)
                     
                     display_img = cv2.resize(img_np, (800, 600))
                     cv2.putText(display_img, f"Frame: {frame_count}", (10, 30),

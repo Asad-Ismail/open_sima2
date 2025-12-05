@@ -40,14 +40,14 @@ def execute_mouse_look(mouse_data: dict):
         print(f"    ⚠ Failed to execute mouse look: {e}")
 
 
-def execute_action_sequence(action_sequence: list, duration: float = 0.3, pause_between: float = 0.2):
+def execute_action_sequence(action_sequence: list, hold_duration: float = 0.1):
     """
-    Execute a sequence of keyboard actions using xdotool.
+    Execute keyboard actions SIMULTANEOUSLY (like human input).
+    Matches recording behavior where multiple keys can be pressed at once.
     
     Args:
-        action_sequence: List of action keys to execute
-        duration: How long to hold each key (seconds)
-        pause_between: Pause between actions (seconds)
+        action_sequence: List of action keys (can include simultaneous keys)
+        hold_duration: How long to hold keys (should match recording interval: 0.1s)
     """
     if not action_sequence or (len(action_sequence) == 1 and action_sequence[0].lower() == 'none'):
         return
@@ -59,15 +59,24 @@ def execute_action_sequence(action_sequence: list, duration: float = 0.3, pause_
         'd': 'd',
         'c': 'c',
         'space': 'space',
-        'enter': 'Return'
+        'enter': 'Return',
+        'up': 'Up',
+        'down': 'Down',
+        'left': 'Left',
+        'right': 'Right'
     }
     
-    print(f"\n  🎮 Executing action sequence: {action_sequence}")
+    # Filter out 'none' actions
+    valid_keys = [k for k in action_sequence if k.lower() != 'none']
     
-    for i, action_key in enumerate(action_sequence):
-        if action_key.lower() == 'none':
-            continue
-            
+    if not valid_keys:
+        return
+    
+    print(f"\n  🎮 Executing: {valid_keys}")
+    
+    # Press all keys down simultaneously
+    pressed_keys = []
+    for action_key in valid_keys:
         try:
             key = key_map.get(action_key.lower())
             if key is None:
@@ -79,19 +88,26 @@ def execute_action_sequence(action_sequence: list, duration: float = 0.3, pause_
                 check=True,
                 stderr=subprocess.DEVNULL
             )
-            time.sleep(duration)
+            pressed_keys.append(key)
+            
+        except Exception as e:
+            print(f"    ⚠ Failed to press {action_key}: {e}")
+    
+    # Hold for duration (matches recording frame interval)
+    time.sleep(hold_duration)
+    
+    # Release all keys
+    for key in pressed_keys:
+        try:
             subprocess.run(
                 ["xdotool", "keyup", key],
                 check=True,
                 stderr=subprocess.DEVNULL
             )
-            print(f"    [{i+1}/{len(action_sequence)}] → {action_key}")
-            
-            if i < len(action_sequence) - 1:
-                time.sleep(pause_between)
-            
         except Exception as e:
-            print(f"    ⚠ Failed to execute {action_key}: {e}")
+            print(f"    ⚠ Failed to release {key}: {e}")
+    
+    print(f"    ✓ Held {len(pressed_keys)} keys for {hold_duration}s")
 
 
 def focus_window(window_id: str):

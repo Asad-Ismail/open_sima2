@@ -17,13 +17,13 @@ from trl import SFTTrainer, SFTConfig
 
 def load_training_data(dataset_dir: str):
     """
-    Load labeled segments into training format.
+    Load labeled segments with actual PIL images.
     
     Args:
         dataset_dir: Path to labeled_segments directory
         
     Returns:
-        List of training samples
+        List of training samples with loaded images
     """
     print(f"Loading training data from: {dataset_dir}")
     
@@ -40,9 +40,15 @@ def load_training_data(dataset_dir: str):
             # Extract components
             messages = data["messages"]
             
-            # Get image path (relative to segment dir)
+            # Get image path and LOAD the actual image
             img_filename = messages[1]["content"][0]["image"]
             img_path = os.path.join(segment_dir, img_filename)
+            
+            if not os.path.exists(img_path):
+                print(f"Warning: Image not found: {img_path}")
+                continue
+                
+            image = Image.open(img_path).convert("RGB")
             
             # Get goal instruction from user message
             goal_text = messages[1]["content"][1]["text"]
@@ -52,9 +58,9 @@ def load_training_data(dataset_dir: str):
             assistant_content = json.loads(messages[2]["content"])
             action_sequence = assistant_content["action_sequence"]
             
-            # Create simplified training sample (no system role, no reasoning)
+            # Create training sample with loaded image
             sample = {
-                "image": img_path,
+                "image": image,  # Actual PIL Image, not path!
                 "goal": goal,
                 "actions": action_sequence
             }
@@ -65,17 +71,17 @@ def load_training_data(dataset_dir: str):
     return all_samples
 
 
-def format_for_training(sample):
+def format_conversation(sample, tokenizer):
     """
-    Convert sample to Qwen3-VL training format.
-    Remove system role and reasoning - just goal + actions.
+    Format sample into conversation for Qwen3-VL training.
+    Uses tokenizer's chat template.
     """
-    # Simple conversation: user asks for actions given goal, assistant responds with action list
-    messages = [
+    # Build conversation matching training format
+    conversation = [
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": sample["image"]},
+                {"type": "image"},  # Placeholder - actual image passed separately
                 {"type": "text", "text": f"Goal: {sample['goal']}\n\nPredict the next 7 actions:"}
             ]
         },
@@ -85,7 +91,13 @@ def format_for_training(sample):
         }
     ]
     
-    return {"messages": messages}
+    # Apply chat template to get text format
+    text = tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=False)
+    
+    return {
+        "image": sample["image"],
+        "text": text
+    }
 
 
 def main():
@@ -144,25 +156,40 @@ def main():
         print("❌ No training data found! Run label_segments.py first.")
         return
     
-    # Format for training
-    print("\n3. Formatting data for training...")
-    formatted_samples = [format_for_training(s) for s in training_samples]
+    # Split into train/val
+    print("\n3. Splitting data...")
+    val_size = int(len(training_samples) * 0.1)  # 10% validation
+    val_samples = training_samples[:val_size]
+    train_samples = training_samples[val_size:]
+    print(f"   • Training samples: {len(train_samples)}")
+    print(f"   • Validation samples: {len(val_samples)}")
     
-    # Create HuggingFace dataset
-    dataset = Dataset.from_list(formatted_samples)
-    print(f"✓ Created dataset with {len(dataset)} samples")
+    # Format for training
+    print("\n4. Formatting conversations...")
+    train_formatted = [format_conversation(s, tokenizer) for s in train_samples]
+    val_formatted = [format_conversation(s, tokenizer) for s in val_samples]
+    
+    # Create datasets
+    train_dataset = Dataset.from_list(train_formatted)
+    val_dataset = Dataset.from_list(val_formatted)
+    print(f"✓ Created datasets")
     
     # Training configuration
-    print("\n4. Configuring trainer...")
+    print("\n5. Configuring trainer...")
     training_args = SFTConfig(
         output_dir=OUTPUT_DIR,
         
         # Training hyperparameters
         per_device_train_batch_size=BATCH_SIZE,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+        per_device_eval_batch_size=BATCH_SIZE,
         num_train_epochs=NUM_EPOCHS,
         learning_rate=LEARNING_RATE,
         warmup_steps=10,
+        
+        # Evaluation
+        eval_strategy="steps",
+        eval_steps=50,
         
         # Optimization
         optim="adamw_8bit",
@@ -177,12 +204,14 @@ def main():
         logging_steps=10,
         save_steps=100,
         save_total_limit=3,
+        load_best_model_at_end=True,
+        metric_for_best_model="loss",
         
         # Other
         seed=3407,
         max_seq_length=MAX_SEQ_LENGTH,
-        dataset_text_field="messages",
-        dataset_kwargs={"skip_prepare_dataset": True},
+        dataset_text_field="text",
+        dataset_kwargs={"skip_prepare_dataset": False},
     )
     
     # Create trainer
@@ -190,12 +219,14 @@ def main():
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
     )
     
     # Train
-    print("\n5. Starting training...")
-    print(f"   • Total samples: {len(dataset)}")
+    print("\n6. Starting training...")
+    print(f"   • Training samples: {len(train_dataset)}")
+    print(f"   • Validation samples: {len(val_dataset)}")
     print(f"   • Batch size: {BATCH_SIZE}")
     print(f"   • Gradient accumulation: {GRADIENT_ACCUMULATION_STEPS}")
     print(f"   • Effective batch size: {BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}")
@@ -207,18 +238,20 @@ def main():
     trainer_stats = trainer.train()
     
     # Save final model
-    print("\n6. Saving model...")
+    print("\n7. Saving model...")
     model.save_pretrained(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
     
     print("\n" + "="*80)
     print("✅ Training complete!")
     print(f"Model saved to: {OUTPUT_DIR}")
-    print(f"Training loss: {trainer_stats.training_loss:.4f}")
+    print(f"Final training loss: {trainer_stats.training_loss:.4f}")
+    if hasattr(trainer_stats, 'metrics') and 'eval_loss' in trainer_stats.metrics:
+        print(f"Final validation loss: {trainer_stats.metrics['eval_loss']:.4f}")
     print("="*80)
     
     # Test inference
-    print("\n7. Testing inference...")
+    print("\n8. Testing inference...")
     FastVisionModel.for_inference(model)
     
     # Load a sample image
