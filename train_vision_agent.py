@@ -9,10 +9,11 @@ import glob
 from pathlib import Path
 from PIL import Image
 import torch
+import wandb
 from unsloth import FastVisionModel, is_bf16_supported
-from transformers import TextStreamer
-from datasets import Dataset
-from trl import SFTTrainer, SFTConfig
+from unsloth.trainer import UnslothVisionDataCollator
+from transformers import TextStreamer, TrainingArguments
+from trl import SFTTrainer
 
 
 def load_training_data(dataset_dir: str):
@@ -71,33 +72,7 @@ def load_training_data(dataset_dir: str):
     return all_samples
 
 
-def format_conversation(sample, tokenizer):
-    """
-    Format sample into conversation for Qwen3-VL training.
-    Uses tokenizer's chat template.
-    """
-    # Build conversation matching training format
-    conversation = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image"},  # Placeholder - actual image passed separately
-                {"type": "text", "text": f"Goal: {sample['goal']}\n\nPredict the next 7 actions:"}
-            ]
-        },
-        {
-            "role": "assistant",
-            "content": json.dumps({"actions": sample["actions"]})
-        }
-    ]
-    
-    # Apply chat template to get text format
-    text = tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=False)
-    
-    return {
-        "image": sample["image"],
-        "text": text
-    }
+
 
 
 def main():
@@ -123,6 +98,23 @@ def main():
     print("="*80)
     print("Qwen3-VL Gameplay Agent Fine-tuning")
     print("="*80)
+    
+    # Initialize Weights & Biases
+    wandb.init(
+        project="darkmod-gameplay-agent",
+        name=f"qwen3vl-lora-r{LORA_R}-bs{BATCH_SIZE}x{GRADIENT_ACCUMULATION_STEPS}",
+        config={
+            "model": MODEL_NAME,
+            "lora_r": LORA_R,
+            "lora_alpha": LORA_ALPHA,
+            "lora_dropout": LORA_DROPOUT,
+            "batch_size": BATCH_SIZE,
+            "gradient_accumulation_steps": GRADIENT_ACCUMULATION_STEPS,
+            "learning_rate": LEARNING_RATE,
+            "num_epochs": NUM_EPOCHS,
+            "max_seq_length": MAX_SEQ_LENGTH,
+        }
+    )
     
     # Load model with LoRA
     print("\n1. Loading base model with LoRA adapters...")
@@ -164,63 +156,80 @@ def main():
     print(f"   • Training samples: {len(train_samples)}")
     print(f"   • Validation samples: {len(val_samples)}")
     
-    # Format for training
-    print("\n4. Formatting conversations...")
-    train_formatted = [format_conversation(s, tokenizer) for s in train_samples]
-    val_formatted = [format_conversation(s, tokenizer) for s in val_samples]
+    # Format dataset for Unsloth (list of dicts with "messages" key)
+    def convert_to_conversation(sample):
+        """Convert a sample to Unsloth conversation format."""
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": sample["image"]},  # Include image directly
+                    {"type": "text", "text": f"Goal: {sample['goal']}\n\nPredict the next 7 actions:"}
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": json.dumps({"actions": sample["actions"]})}
+                ]
+            }
+        ]
+        return {"messages": conversation}
     
-    # Create datasets
-    train_dataset = Dataset.from_list(train_formatted)
-    val_dataset = Dataset.from_list(val_formatted)
-    print(f"✓ Created datasets")
+    print("\n4. Converting to Unsloth format...")
+    train_dataset = [convert_to_conversation(s) for s in train_samples]
+    val_dataset = [convert_to_conversation(s) for s in val_samples]
+    print(f"✓ Converted datasets")
     
-    # Training configuration
+    # Training configuration (using TrainingArguments for TRL 0.24.0)
     print("\n5. Configuring trainer...")
-    training_args = SFTConfig(
-        output_dir=OUTPUT_DIR,
-        
-        # Training hyperparameters
-        per_device_train_batch_size=BATCH_SIZE,
-        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
-        per_device_eval_batch_size=BATCH_SIZE,
-        num_train_epochs=NUM_EPOCHS,
-        learning_rate=LEARNING_RATE,
-        warmup_steps=10,
-        
-        # Evaluation
-        eval_strategy="steps",
-        eval_steps=50,
-        
-        # Optimization
-        optim="adamw_8bit",
-        weight_decay=0.01,
-        lr_scheduler_type="linear",
-        
-        # Memory optimization
-        fp16=not is_bf16_supported(),
-        bf16=is_bf16_supported(),
-        
-        # Logging
-        logging_steps=10,
-        save_steps=100,
-        save_total_limit=3,
-        load_best_model_at_end=True,
-        metric_for_best_model="loss",
-        
-        # Other
-        seed=3407,
-        max_seq_length=MAX_SEQ_LENGTH,
-        dataset_text_field="text",
-        dataset_kwargs={"skip_prepare_dataset": False},
-    )
     
-    # Create trainer
+    FastVisionModel.for_training(model)  # Enable for training!
+    
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
-        args=training_args,
+        data_collator=UnslothVisionDataCollator(model, tokenizer),  # Must use!
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
+        dataset_text_field="",  # Required for vision
+        dataset_kwargs={"skip_prepare_dataset": True},  # Required for vision
+        max_seq_length=MAX_SEQ_LENGTH,  # Pass to SFTTrainer, not TrainingArguments
+        args=TrainingArguments(
+            per_device_train_batch_size=BATCH_SIZE,
+            gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+            per_device_eval_batch_size=BATCH_SIZE,
+            warmup_steps=10,
+            num_train_epochs=NUM_EPOCHS,
+            learning_rate=LEARNING_RATE,
+            
+            # Optimization
+            optim="adamw_8bit",
+            weight_decay=0.01,
+            lr_scheduler_type="linear",
+            
+            # Memory optimization
+            fp16=not is_bf16_supported(),
+            bf16=is_bf16_supported(),
+            
+            # Logging and saving
+            logging_steps=10,
+            eval_strategy="steps",
+            eval_steps=50,
+            save_steps=100,
+            save_total_limit=3,
+            load_best_model_at_end=True,
+            metric_for_best_model="loss",
+            
+            # Output
+            output_dir=OUTPUT_DIR,
+            report_to="wandb",
+            seed=3407,
+            run_name=f"qwen3vl-lora-r{LORA_R}-bs{BATCH_SIZE}x{GRADIENT_ACCUMULATION_STEPS}",
+            
+            # CRITICAL: You MUST put this for vision finetuning:
+            remove_unused_columns=False,
+        ),
     )
     
     # Train
@@ -288,6 +297,12 @@ def main():
         use_cache=True,
         temperature=0.5,
     )
+    
+    # Finish wandb run
+    wandb.finish()
+    print("\n" + "="*80)
+    print("Training Complete!")
+    print("="*80)
 
 
 if __name__ == "__main__":
